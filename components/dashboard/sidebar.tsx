@@ -20,7 +20,7 @@ const SidebarContext = createContext<{
 export const useSidebar = () => useContext(SidebarContext)
 
 const menuItems = [
-  { icon: LayoutDashboard, label: "Dashboard", href: "/" },
+  { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { icon: Ship, label: "Vessels", href: "/vessels" },
   { icon: Shield, label: "Roles", href: "/roles" },
   { icon: Users, label: "Users", href: "/users" },
