@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { notifyPRChange } from "./events/route";
 
 // GET all purchase requests
 export async function GET(request: NextRequest) {
@@ -161,6 +162,9 @@ export async function POST(request: NextRequest) {
         products: true,
       },
     });
+
+    // Notify all connected clients about the new PR
+    notifyPRChange();
 
     return NextResponse.json({ success: true, data: purchaseRequest }, { status: 201 });
   } catch (error) {

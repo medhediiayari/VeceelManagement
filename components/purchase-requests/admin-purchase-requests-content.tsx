@@ -284,6 +284,32 @@ export function AdminPurchaseRequestsContent() {
     fetchData()
   }, [fetchData])
 
+  // Subscribe to Server-Sent Events for real-time PR updates
+  useEffect(() => {
+    const eventSource = new EventSource("/api/purchase-requests/events")
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === "pr-change") {
+          // Refresh data when a new PR is created
+          fetchData()
+        }
+      } catch (error) {
+        console.error("SSE parse error:", error)
+      }
+    }
+    
+    eventSource.onerror = () => {
+      // Reconnect will happen automatically
+      console.log("SSE connection error, will reconnect...")
+    }
+    
+    return () => {
+      eventSource.close()
+    }
+  }, [fetchData])
+
   // Stats
   const stats = useMemo(() => ({
     total: purchaseRequests.length,
@@ -386,19 +412,7 @@ export function AdminPurchaseRequestsContent() {
       })
 
       if (response.ok) {
-        setPurchaseRequests((prev) =>
-          prev.map((pr) =>
-            pr.id === prId
-              ? {
-                  ...pr,
-                  sentToQuotation: true,
-                  quotationSentAt: new Date().toISOString(),
-                  quotationSentBy: currentUser ? { id: currentUser.id, name: currentUser.name } : null,
-                  updatedAt: new Date().toISOString(),
-                }
-              : pr
-          )
-        )
+        await fetchData() // Refresh data after operation
       } else {
         console.error("Failed to send to quotation:", await response.text())
       }
@@ -498,6 +512,7 @@ export function AdminPurchaseRequestsContent() {
         )
         setIsQuotationDialogOpen(false)
         setSelectedPR(null)
+        await fetchData() // Refresh data after operation
       }
     } catch (error) {
       console.error("Error submitting quotation:", error)
@@ -591,9 +606,9 @@ export function AdminPurchaseRequestsContent() {
       if (response.ok) {
         const data = await response.json()
         if (data.success) {
-          setPurchaseOrders((prev) => [data.data, ...prev])
           setIsBCDialogOpen(false)
           setSelectedPR(null)
+          await fetchData() // Refresh data after operation
         }
       } else {
         console.error("Failed to create BC:", await response.text())
@@ -1577,13 +1592,9 @@ export function AdminPurchaseRequestsContent() {
                         <Input
                           type="number"
                           min="0"
-                          max={product.originalQuantity}
                           value={product.validatedQuantity}
                           onChange={(e) => {
-                            const newQty = Math.min(
-                              product.originalQuantity,
-                              Math.max(0, parseInt(e.target.value) || 0)
-                            )
+                            const newQty = Math.max(0, parseInt(e.target.value) || 0)
                             setBcProducts(prev => prev.map((p, i) => 
                               i === index ? { ...p, validatedQuantity: newQty } : p
                             ))

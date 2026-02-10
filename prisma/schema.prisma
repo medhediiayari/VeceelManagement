@@ -258,6 +258,7 @@ model PRProduct {
   remark            String?         // Remark for this item
   unavailableReason String?         // OUT_OF_STOCK or NO_OFFER - null means available
   wasUnavailable    Boolean         @default(false) // Track if product was ever unavailable
+  orderedQuantity   Int             @default(0)     // Quantity already ordered in BCs
   
   // Relations
   purchaseRequestId String

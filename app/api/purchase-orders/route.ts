@@ -106,17 +106,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if a PO already exists for this PR
-    const existingPO = await prisma.purchaseOrder.findFirst({
-      where: { purchaseRequestId },
-    });
-
-    if (existingPO) {
-      return NextResponse.json(
-        { success: false, error: "Un bon de commande existe déjà pour cette demande d'achat" },
-        { status: 400 }
-      );
-    }
+    // Multiple BCs can be created for the same PR (partial orders, different suppliers)
+    // No longer blocking creation if a BC already exists
 
     // Generate reference
     const year = new Date().getFullYear();
@@ -188,6 +179,26 @@ export async function POST(request: NextRequest) {
         products: true,
       },
     });
+
+    // Update orderedQuantity on PR products for each product in the BC
+    for (const product of products) {
+      if (product.prProductId) {
+        // Get current orderedQuantity
+        const prProduct = await prisma.pRProduct.findUnique({
+          where: { id: product.prProductId },
+        });
+        
+        if (prProduct) {
+          const currentOrdered = prProduct.orderedQuantity || 0;
+          const newOrdered = currentOrdered + (Number(product.validatedQuantity) || 0);
+          
+          await prisma.pRProduct.update({
+            where: { id: product.prProductId },
+            data: { orderedQuantity: newOrdered },
+          });
+        }
+      }
+    }
 
     return NextResponse.json({ success: true, data: purchaseOrder }, { status: 201 });
   } catch (error) {
