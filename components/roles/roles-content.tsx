@@ -1,15 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Plus } from "lucide-react"
+import { Plus, Loader2 } from "lucide-react"
 import { PageWrapper, DataTable, FormDialog, type Column } from "@/components/shared"
-import { mockRoles } from "@/data/mock-data"
 import type { Role } from "@/types"
 
 // Available permissions
@@ -33,36 +32,82 @@ const allPermissions = [
  */
 export function RolesContent() {
   // State management
-  const [roles, setRoles] = useState<Role[]>(mockRoles)
+  const [roles, setRoles] = useState<Role[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const [newRole, setNewRole] = useState({
     name: "",
     description: "",
     permissions: [] as string[],
   })
 
+  // Fetch roles from API
+  const fetchRoles = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch("/api/roles")
+      const data = await response.json()
+      if (data.success) {
+        setRoles(data.data.map((r: Role & { _count?: { users: number } }) => ({
+          ...r,
+          usersCount: r._count?.users || 0,
+        })))
+      }
+    } catch (error) {
+      console.error("Error fetching roles:", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchRoles()
+  }, [fetchRoles])
+
   // Form validation
   const isFormValid = Boolean(newRole.name && newRole.description)
 
   // Handlers
-  const handleAddRole = () => {
+  const handleAddRole = async () => {
     if (!isFormValid) return
 
-    const role: Role = {
-      id: String(roles.length + 1),
-      name: newRole.name,
-      description: newRole.description,
-      permissions: newRole.permissions,
-      usersCount: 0,
-    }
+    try {
+      setIsSaving(true)
+      const response = await fetch("/api/roles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newRole.name,
+          description: newRole.description,
+          permissions: newRole.permissions,
+        }),
+      })
 
-    setRoles([...roles, role])
-    resetForm()
-    setIsAddDialogOpen(false)
+      if (response.ok) {
+        await fetchRoles()
+        resetForm()
+        setIsAddDialogOpen(false)
+      }
+    } catch (error) {
+      console.error("Error adding role:", error)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
-  const handleDeleteRole = (role: Role) => {
-    setRoles(roles.filter((r) => r.id !== role.id))
+  const handleDeleteRole = async (role: Role) => {
+    try {
+      const response = await fetch(`/api/roles/${role.id}`, {
+        method: "DELETE",
+      })
+
+      if (response.ok) {
+        setRoles(roles.filter((r) => r.id !== role.id))
+      }
+    } catch (error) {
+      console.error("Error deleting role:", error)
+    }
   }
 
   const handlePermissionToggle = (permission: string, checked: boolean) => {
@@ -116,14 +161,27 @@ export function RolesContent() {
       onClick={() => setIsAddDialogOpen(true)}
     >
       <Plus className="w-4 h-4 mr-2" />
-      Add Role
+      Ajouter un rôle
     </Button>
   )
 
+  if (isLoading) {
+    return (
+      <PageWrapper
+        title="Gestion des rôles"
+        description="Configurez les rôles avec des permissions spécifiques."
+      >
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+        </div>
+      </PageWrapper>
+    )
+  }
+
   return (
     <PageWrapper
-      title="Roles Management"
-      description="Configure roles with specific permissions for crew members."
+      title="Gestion des rôles"
+      description="Configurez les rôles avec des permissions spécifiques."
       actions={AddRoleButton}
     >
       <DataTable

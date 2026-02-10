@@ -77,6 +77,8 @@ export interface DocumentFolder {
   createdAt: string
   assignments: Assignment[]
   filesCount: number
+  vesselId?: string | null
+  vessel?: { id: string; name: string } | null
 }
 
 // File inside a folder
@@ -86,7 +88,8 @@ export interface DocumentFile {
   name: string
   type: "pdf" | "image" | "excel" | "word" | "other"
   mimeType: string
-  size: string
+  size: number | string
+  path?: string // File path on server
   uploadedBy: string
   uploadedAt: string
   assignments: Assignment[] // Can override folder assignment
@@ -140,6 +143,36 @@ export interface StatCard {
   color: string
   trend: string
 }
+
+// ========================================
+// PURCHASE REQUEST TYPES
+// ========================================
+export type PRStatus = "draft" | "pending" | "approved" | "rejected"
+export type PRCategory = "spare_parts" | "consumables" | "safety_equipment" | "tools" | "lubricants" | "other"
+
+export interface PRProduct {
+  id: string
+  name: string
+  quantity: number
+  unit: string
+  description?: string
+}
+
+export interface PurchaseRequest {
+  id: string
+  reference: string
+  category: PRCategory
+  products: PRProduct[]
+  status: PRStatus
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  vessel: string
+  notes?: string
+  priority: "low" | "medium" | "high" | "urgent"
+}
+
+export type PurchaseRequestFormData = Omit<PurchaseRequest, "id" | "reference" | "createdAt" | "updatedAt" | "status">
 
 // ========================================
 // COMMON TYPES

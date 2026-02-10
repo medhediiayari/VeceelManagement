@@ -42,12 +42,6 @@ import {
   AlertDescription,
   AlertTitle,
 } from "@/components/ui/alert"
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import {
   Plus,
@@ -77,15 +71,13 @@ import {
   X,
   Bell,
   Table as TableIcon,
+  Loader2,
+  LayoutGrid,
+  Rows3,
+  StretchHorizontal,
 } from "lucide-react"
 import { PageWrapper } from "@/components/shared"
-import {
-  mockDocumentFolders,
-  mockDocumentFiles,
-  mockVessels,
-  mockUsers,
-  FOLDER_COLORS,
-} from "@/data/mock-data"
+import { FOLDER_COLORS } from "@/data/mock-data"
 import type { DocumentFolder, DocumentFile, Assignment, AssignmentType, FileNote } from "@/types"
 import * as XLSX from "xlsx"
 import { cn } from "@/lib/utils"
@@ -113,6 +105,16 @@ const getFileTypeFromMime = (mimeType: string): DocumentFile["type"] => {
   if (mimeType.includes("spreadsheet") || mimeType.includes("excel")) return "excel"
   if (mimeType.includes("word") || mimeType.includes("document")) return "word"
   return "other"
+}
+
+// Format file size from bytes to human-readable format
+const formatFileSize = (bytes: number | string): string => {
+  if (typeof bytes === 'string') return bytes // Already formatted
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
 // Check if a date is expiring soon (within 7 days) or already expired
@@ -149,18 +151,25 @@ const formatDate = (dateString: string) => {
  */
 export function DocumentsContent() {
   // State management
-  const [folders, setFolders] = useState<DocumentFolder[]>(mockDocumentFolders)
-  const [files, setFiles] = useState<DocumentFile[]>(mockDocumentFiles)
+  const [folders, setFolders] = useState<DocumentFolder[]>([])
+  const [files, setFiles] = useState<DocumentFile[]>([])
+  const [vessels, setVessels] = useState<{ id: string; name: string }[]>([])
+  const [users, setUsers] = useState<{ id: string; name: string }[]>([])
+  const [currentUser, setCurrentUser] = useState<{ id: string; name: string; role?: string; vesselId?: string | null } | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
   const [selectedFolder, setSelectedFolder] = useState<DocumentFolder | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
+  const [viewMode, setViewMode] = useState<"tiles" | "list" | "compact">("tiles")
   const [isDragging, setIsDragging] = useState(false)
+
+  // Vessel roles (read-only access)
+  const VESSEL_ROLES = ["CAPITAINE", "CHIEF_MATE", "CHEF_MECANICIEN", "SECOND", "YOTNA"]
+  const isReadOnly = currentUser?.role && VESSEL_ROLES.includes(currentUser.role)
 
   // Dialog states
   const [isCreateFolderOpen, setIsCreateFolderOpen] = useState(false)
   const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false)
   const [isEditFolderOpen, setIsEditFolderOpen] = useState(false)
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isNoteDialogOpen, setIsNoteDialogOpen] = useState(false)
   const [isViewNotesOpen, setIsViewNotesOpen] = useState(false)
   const [showAlerts, setShowAlerts] = useState(true)
@@ -174,6 +183,7 @@ export function DocumentsContent() {
   const [newFolder, setNewFolder] = useState({
     name: "",
     color: FOLDER_COLORS[0].value,
+    vesselId: "",
   })
 
   // New note form
@@ -193,6 +203,66 @@ export function DocumentsContent() {
     type: "vessel",
     targetId: "",
   })
+
+  // Fetch data from API
+  const fetchData = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      const [foldersRes, documentsRes, vesselsRes, usersRes, sessionRes] = await Promise.all([
+        fetch("/api/documents/folders"),
+        fetch("/api/documents"),
+        fetch("/api/vessels"),
+        fetch("/api/users"),
+        fetch("/api/auth/session"),
+      ])
+
+      const [foldersData, documentsData, vesselsData, usersData, sessionData] = await Promise.all([
+        foldersRes.json(),
+        documentsRes.json(),
+        vesselsRes.json(),
+        usersRes.json(),
+        sessionRes.json(),
+      ])
+
+      if (foldersData.success) {
+        setFolders(foldersData.data.map((f: DocumentFolder & { documentsCount?: number }) => ({
+          ...f,
+          filesCount: f.documentsCount || 0,
+          assignments: f.assignments || [],
+        })))
+      }
+      if (documentsData.success) {
+        setFiles(documentsData.data.map((d: DocumentFile & { uploadedBy?: { id: string; name: string } | string }) => ({
+          ...d,
+          uploadedBy: typeof d.uploadedBy === 'object' && d.uploadedBy !== null ? d.uploadedBy.name : d.uploadedBy,
+          notes: d.notes || [],
+          assignments: d.assignments || [],
+        })))
+      }
+      if (vesselsData.success) {
+        setVessels(vesselsData.data.map((v: { id: string; name: string }) => ({ id: v.id, name: v.name })))
+      }
+      if (usersData.success) {
+        setUsers(usersData.data.map((u: { id: string; name: string }) => ({ id: u.id, name: u.name })))
+      }
+      if (sessionData.authenticated && sessionData.user) {
+        setCurrentUser({ 
+          id: sessionData.user.id, 
+          name: sessionData.user.name,
+          role: sessionData.user.role,
+          vesselId: sessionData.user.vesselId,
+        })
+      }
+    } catch (error) {
+      console.error("Error fetching data:", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
 
   // Computed values
   const currentFolderFiles = useMemo(() => {
@@ -227,53 +297,99 @@ export function DocumentsContent() {
   }, [files, folders])
 
   // Handlers
-  const handleCreateFolder = () => {
-    if (!newFolder.name) return
+  const handleCreateFolder = async () => {
+    if (!newFolder.name || !currentUser) return
 
-    const folder: DocumentFolder = {
-      id: `folder-${Date.now()}`,
-      name: newFolder.name,
-      color: newFolder.color,
-      createdBy: "Current User",
-      createdAt: new Date().toISOString().split("T")[0],
-      assignments: [],
-      filesCount: 0,
+    try {
+      const response = await fetch("/api/documents/folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newFolder.name,
+          color: newFolder.color,
+          vesselId: newFolder.vesselId || null,
+          createdById: currentUser.id,
+        }),
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        await fetchData() // Refresh data from server
+      } else {
+        console.error("Error creating folder:", result.error)
+      }
+    } catch (error) {
+      console.error("Error creating folder:", error)
     }
 
-    setFolders([...folders, folder])
-    setNewFolder({ name: "", color: FOLDER_COLORS[0].value })
+    setNewFolder({ name: "", color: FOLDER_COLORS[0].value, vesselId: "" })
     setIsCreateFolderOpen(false)
   }
 
-  const handleUpdateFolder = () => {
+  const handleUpdateFolder = async () => {
     if (!editingFolder || !newFolder.name) return
 
-    setFolders(folders.map((f) =>
-      f.id === editingFolder.id
-        ? { ...f, name: newFolder.name, color: newFolder.color }
-        : f
-    ))
+    try {
+      const response = await fetch(`/api/documents/folders/${editingFolder.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newFolder.name,
+          color: newFolder.color,
+          vesselId: newFolder.vesselId || null,
+        }),
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        await fetchData() // Refresh data from server
+      } else {
+        console.error("Error updating folder:", result.error)
+      }
+    } catch (error) {
+      console.error("Error updating folder:", error)
+    }
+
     setEditingFolder(null)
-    setNewFolder({ name: "", color: FOLDER_COLORS[0].value })
+    setNewFolder({ name: "", color: FOLDER_COLORS[0].value, vesselId: "" })
     setIsEditFolderOpen(false)
   }
 
-  const handleDeleteFolder = (folder: DocumentFolder) => {
-    setFolders(folders.filter((f) => f.id !== folder.id))
-    setFiles(files.filter((f) => f.folderId !== folder.id))
-    if (selectedFolder?.id === folder.id) {
-      setSelectedFolder(null)
+  const handleDeleteFolder = async (folder: DocumentFolder) => {
+    try {
+      const response = await fetch(`/api/documents/folders/${folder.id}`, {
+        method: "DELETE",
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        if (selectedFolder?.id === folder.id) {
+          setSelectedFolder(null)
+        }
+        await fetchData() // Refresh data from server
+      } else {
+        console.error("Error deleting folder:", result.error)
+      }
+    } catch (error) {
+      console.error("Error deleting folder:", error)
     }
   }
 
-  const handleDeleteFile = (file: DocumentFile) => {
-    setFiles(files.filter((f) => f.id !== file.id))
-    // Update folder file count
-    setFolders(folders.map((folder) =>
-      folder.id === file.folderId
-        ? { ...folder, filesCount: folder.filesCount - 1 }
-        : folder
-    ))
+  const handleDeleteFile = async (file: DocumentFile) => {
+    try {
+      const response = await fetch(`/api/documents/${file.id}`, {
+        method: "DELETE",
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        await fetchData() // Refresh data from server
+      } else {
+        console.error("Error deleting file:", result.error)
+      }
+    } catch (error) {
+      console.error("Error deleting file:", error)
+    }
   }
 
   const openAssignDialog = (type: "folder" | "file", item: DocumentFolder | DocumentFile) => {
@@ -284,26 +400,27 @@ export function DocumentsContent() {
 
   const openEditFolder = (folder: DocumentFolder) => {
     setEditingFolder(folder)
-    setNewFolder({ name: folder.name, color: folder.color })
+    setNewFolder({ name: folder.name, color: folder.color, vesselId: folder.vesselId || "" })
     setIsEditFolderOpen(true)
   }
 
-  // Preview file - opens in a new browser window
+  // Preview file - opens in a new browser tab
   const openPreview = (file: DocumentFile) => {
     // Store file data in sessionStorage for the preview page
     const previewData = {
+      id: file.id,
       name: file.name,
       size: file.size,
       type: file.type,
       mimeType: file.mimeType,
       uploadedBy: file.uploadedBy,
       uploadedAt: file.uploadedAt,
-      spreadsheetData: file.spreadsheetData,
+      path: file.path || file.url,
     }
     sessionStorage.setItem("previewFileData", JSON.stringify(previewData))
     
-    // Open preview in new window
-    window.open("/documents/preview", "_blank", "width=1200,height=800")
+    // Open preview in new tab (full window, not popup)
+    window.open("/preview", "_blank")
   }
 
   // Notes handlers
@@ -381,52 +498,62 @@ export function DocumentsContent() {
     ))
   }
 
-  const handleAddAssignment = () => {
-    if (!assignTarget || !assignmentForm.targetId) return
+  const handleAddAssignment = async () => {
+    // For "company" type, targetId is not required (use "company" as default)
+    const targetId = assignmentForm.type === "company" ? "company" : assignmentForm.targetId
+    if (!assignTarget || (!targetId && assignmentForm.type !== "company")) return
 
-    const targetName = assignmentForm.type === "vessel"
-      ? mockVessels.find((v) => v.id === assignmentForm.targetId)?.name || ""
-      : assignmentForm.type === "user"
-      ? mockUsers.find((u) => u.id === assignmentForm.targetId)?.name || ""
-      : "Company Internal"
+    try {
+      const endpoint = assignTarget.type === "folder"
+        ? `/api/documents/folders/${assignTarget.item.id}/assignments`
+        : `/api/documents/${assignTarget.item.id}/assignments`
 
-    const newAssignment: Assignment = {
-      type: assignmentForm.type,
-      targetId: assignmentForm.targetId,
-      targetName,
-    }
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: assignmentForm.type,
+          targetId: targetId,
+        }),
+      })
 
-    if (assignTarget.type === "folder") {
-      setFolders(folders.map((f) =>
-        f.id === assignTarget.item.id
-          ? { ...f, assignments: [...f.assignments, newAssignment] }
-          : f
-      ))
-    } else {
-      setFiles(files.map((f) =>
-        f.id === assignTarget.item.id
-          ? { ...f, assignments: [...f.assignments, newAssignment] }
-          : f
-      ))
+      const result = await response.json()
+      if (result.success) {
+        // Refresh data from server
+        await fetchData()
+      } else {
+        console.error("Error adding assignment:", result.error)
+        alert(result.error)
+      }
+    } catch (error) {
+      console.error("Error adding assignment:", error)
     }
 
     setIsAssignDialogOpen(false)
     setAssignTarget(null)
   }
 
-  const handleRemoveAssignment = (itemId: string, itemType: "folder" | "file", assignmentIndex: number) => {
-    if (itemType === "folder") {
-      setFolders(folders.map((f) =>
-        f.id === itemId
-          ? { ...f, assignments: f.assignments.filter((_, i) => i !== assignmentIndex) }
-          : f
-      ))
-    } else {
-      setFiles(files.map((f) =>
-        f.id === itemId
-          ? { ...f, assignments: f.assignments.filter((_, i) => i !== assignmentIndex) }
-          : f
-      ))
+  const handleRemoveAssignment = async (
+    itemId: string, 
+    itemType: "folder" | "file", 
+    assignment: { type: string; targetId: string }
+  ) => {
+    try {
+      const endpoint = itemType === "folder"
+        ? `/api/documents/folders/${itemId}/assignments?type=${assignment.type}&targetId=${assignment.targetId}`
+        : `/api/documents/${itemId}/assignments?type=${assignment.type}&targetId=${assignment.targetId}`
+
+      const response = await fetch(endpoint, { method: "DELETE" })
+
+      const result = await response.json()
+      if (result.success) {
+        // Refresh data from server
+        await fetchData()
+      } else {
+        console.error("Error removing assignment:", result.error)
+      }
+    } catch (error) {
+      console.error("Error removing assignment:", error)
     }
   }
 
@@ -483,73 +610,68 @@ export function DocumentsContent() {
     e.preventDefault()
     setIsDragging(false)
 
-    if (!selectedFolder) return
+    if (!selectedFolder || !currentUser) return
 
     const droppedFiles = Array.from(e.dataTransfer.files)
     
-    // Process files and parse spreadsheets
-    const processedFiles = await Promise.all(
-      droppedFiles.map(async (file, index) => {
-        const spreadsheetData = await parseSpreadsheetFile(file)
-        
-        return {
-          id: `file-${Date.now()}-${index}`,
-          folderId: selectedFolder.id,
-          name: file.name,
-          type: getFileTypeFromMime(file.type),
-          mimeType: file.type,
-          size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-          uploadedBy: "Current User",
-          uploadedAt: new Date().toISOString().split("T")[0],
-          assignments: [],
-          notes: [],
-          spreadsheetData,
-        } as DocumentFile
-      })
-    )
-
-    setFiles((prev) => [...prev, ...processedFiles])
-    // Update folder file count
-    setFolders((prev) => prev.map((folder) =>
-      folder.id === selectedFolder.id
-        ? { ...folder, filesCount: folder.filesCount + processedFiles.length }
-        : folder
-    ))
-  }, [selectedFolder])
+    // Upload files to API using FormData
+    try {
+      await Promise.all(
+        droppedFiles.map(async (file) => {
+          const formData = new FormData()
+          formData.append("file", file)
+          formData.append("folderId", selectedFolder.id)
+          formData.append("uploadedById", currentUser.id)
+          
+          const response = await fetch("/api/documents/upload", {
+            method: "POST",
+            body: formData,
+          })
+          
+          const result = await response.json()
+          if (!result.success) {
+            console.error("Error uploading file:", result.error)
+          }
+        })
+      )
+      
+      await fetchData() // Refresh data from server
+    } catch (error) {
+      console.error("Error uploading files:", error)
+    }
+  }, [selectedFolder, currentUser, fetchData])
 
   // File input handler
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedFolder || !e.target.files) return
+    if (!selectedFolder || !e.target.files || !currentUser) return
 
     const uploadedFiles = Array.from(e.target.files)
     
-    // Process files and parse spreadsheets
-    const processedFiles = await Promise.all(
-      uploadedFiles.map(async (file, index) => {
-        const spreadsheetData = await parseSpreadsheetFile(file)
-        
-        return {
-          id: `file-${Date.now()}-${index}`,
-          folderId: selectedFolder.id,
-          name: file.name,
-          type: getFileTypeFromMime(file.type),
-          mimeType: file.type,
-          size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-          uploadedBy: "Current User",
-          uploadedAt: new Date().toISOString().split("T")[0],
-          assignments: [],
-          notes: [],
-          spreadsheetData,
-        } as DocumentFile
-      })
-    )
-
-    setFiles([...files, ...processedFiles])
-    setFolders(folders.map((folder) =>
-      folder.id === selectedFolder.id
-        ? { ...folder, filesCount: folder.filesCount + processedFiles.length }
-        : folder
-    ))
+    // Upload files to API using FormData
+    try {
+      await Promise.all(
+        uploadedFiles.map(async (file) => {
+          const formData = new FormData()
+          formData.append("file", file)
+          formData.append("folderId", selectedFolder.id)
+          formData.append("uploadedById", currentUser.id)
+          
+          const response = await fetch("/api/documents/upload", {
+            method: "POST",
+            body: formData,
+          })
+          
+          const result = await response.json()
+          if (!result.success) {
+            console.error("Error uploading file:", result.error)
+          }
+        })
+      )
+      
+      await fetchData() // Refresh data from server
+    } catch (error) {
+      console.error("Error uploading files:", error)
+    }
   }
 
   // Priority badge colors
@@ -635,43 +757,57 @@ export function DocumentsContent() {
           >
             <Folder className="w-6 h-6" style={{ color: folder.color }} />
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <MoreVertical className="w-4 h-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEditFolder(folder); }}>
-                <Edit className="w-4 h-4 mr-2" />
-                Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openAssignDialog("folder", folder); }}>
-                <Share2 className="w-4 h-4 mr-2" />
-                Assign
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive"
-                onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder); }}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {!isReadOnly && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                <Button variant="ghost" size="icon" className="h-8 w-8">
+                  <MoreVertical className="w-4 h-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEditFolder(folder); }}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openAssignDialog("folder", folder); }}>
+                  <Share2 className="w-4 h-4 mr-2" />
+                  Assign
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder); }}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
         <h3 className="font-semibold truncate mb-1">{folder.name}</h3>
-        <p className="text-sm text-muted-foreground mb-3">
-          {folder.filesCount} file{folder.filesCount !== 1 ? "s" : ""}
+        <p className="text-sm text-muted-foreground mb-2">
+          {folder.filesCount} fichier{folder.filesCount !== 1 ? "s" : ""}
         </p>
+        {folder.vessel && (
+          <Badge variant="outline" className="mb-2">
+            <Ship className="w-3 h-3 mr-1" />
+            {folder.vessel.name}
+          </Badge>
+        )}
+        {!folder.vessel && !folder.vesselId && (
+          <Badge variant="secondary" className="mb-2">
+            <Building2 className="w-3 h-3 mr-1" />
+            Company
+          </Badge>
+        )}
         {folder.assignments.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {folder.assignments.map((assignment, index) => (
               <AssignmentBadge
                 key={index}
                 assignment={assignment}
-                onRemove={() => handleRemoveAssignment(folder.id, "folder", index)}
+                onRemove={isReadOnly ? undefined : () => handleRemoveAssignment(folder.id, "folder", { type: assignment.type, targetId: assignment.targetId })}
               />
             ))}
           </div>
@@ -702,35 +838,39 @@ export function DocumentsContent() {
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem onClick={() => openPreview(file)}>
                     <Eye className="w-4 h-4 mr-2" />
-                    Preview
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openAddNote(file)}>
-                    <StickyNote className="w-4 h-4 mr-2" />
-                    Add Note
+                    Visualiser
                   </DropdownMenuItem>
                   {file.notes.length > 0 && (
                     <DropdownMenuItem onClick={() => openViewNotes(file)}>
                       <FileText className="w-4 h-4 mr-2" />
-                      View Notes ({file.notes.length})
+                      Voir les notes ({file.notes.length})
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem>
                     <Download className="w-4 h-4 mr-2" />
-                    Download
+                    Télécharger
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openAssignDialog("file", file)}>
-                    <Share2 className="w-4 h-4 mr-2" />
-                    Assign
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="text-destructive"
-                    onClick={() => handleDeleteFile(file)}
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Delete
-                  </DropdownMenuItem>
+                  {!isReadOnly && (
+                    <>
+                      <DropdownMenuItem onClick={() => openAddNote(file)}>
+                        <StickyNote className="w-4 h-4 mr-2" />
+                        Ajouter une note
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => openAssignDialog("file", file)}>
+                        <Share2 className="w-4 h-4 mr-2" />
+                        Assigner
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-destructive"
+                        onClick={() => handleDeleteFile(file)}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Supprimer
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -739,7 +879,7 @@ export function DocumentsContent() {
             {file.name}
           </h3>
           <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-            <span>{file.size}</span>
+            <span>{formatFileSize(file.size)}</span>
             <span>•</span>
             <span>{file.uploadedAt}</span>
           </div>
@@ -755,7 +895,7 @@ export function DocumentsContent() {
                 <AssignmentBadge
                   key={index}
                   assignment={assignment}
-                  onRemove={() => handleRemoveAssignment(file.id, "file", index)}
+                  onRemove={isReadOnly ? undefined : () => handleRemoveAssignment(file.id, "file", { type: assignment.type, targetId: assignment.targetId })}
                 />
               ))}
             </div>
@@ -777,7 +917,7 @@ export function DocumentsContent() {
           <div className="flex-1 min-w-0">
             <h4 className="font-medium text-sm truncate">{file.name}</h4>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{file.size}</span>
+              <span>{formatFileSize(file.size)}</span>
               <span>•</span>
               <span>{file.uploadedBy}</span>
               <span>•</span>
@@ -836,13 +976,30 @@ export function DocumentsContent() {
     )
   }
 
+  if (isLoading) {
+    return (
+      <PageWrapper
+        title="Documents CSO"
+        description={isReadOnly ? "Consultation des documents de votre navire" : "Gérez vos dossiers et fichiers"}
+      >
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+        </div>
+      </PageWrapper>
+    )
+  }
+
   return (
     <PageWrapper
-      title={selectedFolder ? selectedFolder.name : "Documents"}
+      title={selectedFolder ? selectedFolder.name : "Documents CSO"}
       description={
         selectedFolder
-          ? `Manage files in ${selectedFolder.name}`
-          : "Manage your document folders and files"
+          ? isReadOnly 
+            ? `Documents dans ${selectedFolder.name}`
+            : `Gérer les fichiers dans ${selectedFolder.name}`
+          : isReadOnly 
+            ? "Consultation des documents de votre navire (lecture seule)"
+            : "Gérez vos dossiers et fichiers"
       }
     >
       {/* Expiration Alerts */}
@@ -897,49 +1054,108 @@ export function DocumentsContent() {
           />
         </div>
         <div className="flex gap-2">
-          {!selectedFolder && expiringFiles.length > 0 && !showAlerts && (
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setShowAlerts(true)}
-              className="relative"
-            >
-              <Bell className="w-4 h-4" />
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-destructive text-destructive-foreground text-xs rounded-full flex items-center justify-center">
-                {expiringFiles.length}
-              </span>
-            </Button>
+          {!selectedFolder && (
+            <>
+              {/* SharePoint-style view toggle for folders */}
+              <div className="flex border rounded-md overflow-hidden">
+                <Button
+                  variant={viewMode === "tiles" ? "default" : "ghost"}
+                  size="icon"
+                  className="rounded-none border-0"
+                  onClick={() => setViewMode("tiles")}
+                  title="Affichage en vignettes"
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === "list" ? "default" : "ghost"}
+                  size="icon"
+                  className="rounded-none border-0 border-l"
+                  onClick={() => setViewMode("list")}
+                  title="Affichage en liste"
+                >
+                  <Rows3 className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === "compact" ? "default" : "ghost"}
+                  size="icon"
+                  className="rounded-none border-0 border-l"
+                  onClick={() => setViewMode("compact")}
+                  title="Affichage compact"
+                >
+                  <StretchHorizontal className="w-4 h-4" />
+                </Button>
+              </div>
+              {expiringFiles.length > 0 && !showAlerts && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setShowAlerts(true)}
+                  className="relative"
+                >
+                  <Bell className="w-4 h-4" />
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-destructive text-destructive-foreground text-xs rounded-full flex items-center justify-center">
+                    {expiringFiles.length}
+                  </span>
+                </Button>
+              )}
+              {!isReadOnly && (
+                <Button onClick={() => setIsCreateFolderOpen(true)}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Nouveau dossier
+                </Button>
+              )}
+            </>
           )}
           {selectedFolder && (
             <>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
-              >
-                {viewMode === "grid" ? <List className="w-4 h-4" /> : <Grid3X3 className="w-4 h-4" />}
-              </Button>
-              <label>
-                <input
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={handleFileInputChange}
-                />
-                <Button variant="outline" asChild>
-                  <span>
-                    <Upload className="w-4 h-4 mr-2" />
-                    Upload Files
-                  </span>
+              {/* SharePoint-style view toggle */}
+              <div className="flex border rounded-md overflow-hidden">
+                <Button
+                  variant={viewMode === "tiles" ? "default" : "ghost"}
+                  size="icon"
+                  className="rounded-none border-0"
+                  onClick={() => setViewMode("tiles")}
+                  title="Affichage en vignettes"
+                >
+                  <LayoutGrid className="w-4 h-4" />
                 </Button>
-              </label>
+                <Button
+                  variant={viewMode === "list" ? "default" : "ghost"}
+                  size="icon"
+                  className="rounded-none border-0 border-l"
+                  onClick={() => setViewMode("list")}
+                  title="Affichage en liste"
+                >
+                  <Rows3 className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant={viewMode === "compact" ? "default" : "ghost"}
+                  size="icon"
+                  className="rounded-none border-0 border-l"
+                  onClick={() => setViewMode("compact")}
+                  title="Affichage compact"
+                >
+                  <StretchHorizontal className="w-4 h-4" />
+                </Button>
+              </div>
+              {!isReadOnly && (
+                <label>
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileInputChange}
+                  />
+                  <Button variant="outline" asChild>
+                    <span>
+                      <Upload className="w-4 h-4 mr-2" />
+                      Importer
+                    </span>
+                  </Button>
+                </label>
+              )}
             </>
-          )}
-          {!selectedFolder && (
-            <Button onClick={() => setIsCreateFolderOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              New Folder
-            </Button>
           )}
         </div>
       </div>
@@ -962,73 +1178,344 @@ export function DocumentsContent() {
         <div
           className={cn(
             "min-h-[400px] rounded-lg border-2 border-dashed transition-colors p-4",
-            isDragging ? "border-primary bg-primary/5" : "border-transparent"
+            isDragging && !isReadOnly ? "border-primary bg-primary/5" : "border-transparent"
           )}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
+          onDragOver={isReadOnly ? undefined : handleDragOver}
+          onDragLeave={isReadOnly ? undefined : handleDragLeave}
+          onDrop={isReadOnly ? undefined : handleDrop}
         >
           {filteredFiles.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-[300px] text-muted-foreground">
               <Upload className="w-12 h-12 mb-4" />
-              <p className="text-lg font-medium mb-2">Drop files here</p>
-              <p className="text-sm">or click Upload Files to add documents</p>
+              <p className="text-lg font-medium mb-2">
+                {isReadOnly ? "Aucun fichier disponible" : "Déposez vos fichiers ici"}
+              </p>
+              <p className="text-sm">
+                {isReadOnly 
+                  ? "Ce dossier ne contient pas encore de documents" 
+                  : "ou cliquez sur Upload Files pour ajouter des documents"
+                }
+              </p>
             </div>
-          ) : viewMode === "grid" ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          ) : viewMode === "tiles" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
               {filteredFiles.map((file) => (
                 <FileCard key={file.id} file={file} />
               ))}
             </div>
-          ) : (
+          ) : viewMode === "list" ? (
             <div className="space-y-2">
               {filteredFiles.map((file) => (
                 <FileListItem key={file.id} file={file} />
               ))}
             </div>
-          )}
-        </div>
-      ) : (
-        // Folders view
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {filteredFolders.map((folder) => (
-            <FolderCard key={folder.id} folder={folder} />
-          ))}
-          {filteredFolders.length === 0 && (
-            <div className="col-span-full flex flex-col items-center justify-center h-[300px] text-muted-foreground">
-              <Folder className="w-12 h-12 mb-4" />
-              <p className="text-lg font-medium mb-2">No folders yet</p>
-              <p className="text-sm mb-4">Create your first folder to start organizing documents</p>
-              <Button onClick={() => setIsCreateFolderOpen(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                Create Folder
-              </Button>
+          ) : (
+            /* Compact view - SharePoint style table */
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-muted/50">
+                  <tr className="text-left text-sm">
+                    <th className="px-4 py-3 font-medium">Type</th>
+                    <th className="px-4 py-3 font-medium">Nom</th>
+                    <th className="px-4 py-3 font-medium hidden md:table-cell">Date de modification</th>
+                    <th className="px-4 py-3 font-medium hidden sm:table-cell">Taille</th>
+                    <th className="px-4 py-3 font-medium text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {filteredFiles.map((file) => {
+                    const Icon = getFileIcon(file.type)
+                    return (
+                      <tr key={file.id} className="hover:bg-muted/30 transition-colors">
+                        <td className="px-4 py-2">
+                          <Icon className={cn(
+                            "w-5 h-5",
+                            file.type === "pdf" && "text-red-500",
+                            file.type === "image" && "text-blue-500",
+                            file.type === "excel" && "text-green-500",
+                            file.type === "word" && "text-blue-600"
+                          )} />
+                        </td>
+                        <td className="px-4 py-2">
+                          <button
+                            onClick={() => openPreview(file)}
+                            className="text-left hover:text-primary hover:underline font-medium"
+                          >
+                            {file.name}
+                          </button>
+                        </td>
+                        <td className="px-4 py-2 text-sm text-muted-foreground hidden md:table-cell">
+                          {formatDate(file.uploadedAt)}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-muted-foreground hidden sm:table-cell">
+                          {formatFileSize(file.size)}
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openPreview(file)}>
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8">
+                              <Download className="w-4 h-4" />
+                            </Button>
+                            {!isReadOnly && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                                    <MoreVertical className="w-4 h-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onClick={() => openAssignDialog("file", file)}>
+                                    <Share2 className="w-4 h-4 mr-2" />
+                                    Assigner
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    className="text-destructive"
+                                    onClick={() => handleDeleteFile(file.id)}
+                                  >
+                                    <Trash2 className="w-4 h-4 mr-2" />
+                                    Supprimer
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
+      ) : (
+        // Folders view with SharePoint-style modes
+        <>
+          {filteredFolders.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-[300px] text-muted-foreground">
+              <Folder className="w-12 h-12 mb-4" />
+              <p className="text-lg font-medium mb-2">
+                {isReadOnly ? "Aucun dossier disponible" : "Aucun dossier"}
+              </p>
+              <p className="text-sm mb-4">
+                {isReadOnly 
+                  ? "Aucun dossier n'est assigné à votre navire pour le moment"
+                  : "Créez votre premier dossier pour organiser vos documents"
+                }
+              </p>
+              {!isReadOnly && (
+                <Button onClick={() => setIsCreateFolderOpen(true)}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Créer un dossier
+                </Button>
+              )}
+            </div>
+          ) : viewMode === "tiles" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {filteredFolders.map((folder) => (
+                <FolderCard key={folder.id} folder={folder} />
+              ))}
+            </div>
+          ) : viewMode === "list" ? (
+            <div className="space-y-2">
+              {filteredFolders.map((folder) => (
+                <Card
+                  key={folder.id}
+                  className="cursor-pointer hover:shadow-md transition-all"
+                  onClick={() => setSelectedFolder(folder)}
+                >
+                  <CardContent className="p-4 flex items-center gap-4">
+                    <div
+                      className="w-12 h-12 rounded-lg flex items-center justify-center"
+                      style={{ backgroundColor: folder.color + "20" }}
+                    >
+                      <Folder className="w-6 h-6" style={{ color: folder.color }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold truncate">{folder.name}</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {folder.filesCount} fichier{folder.filesCount !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                    <div className="text-sm text-muted-foreground hidden md:block">
+                      {formatDate(folder.createdAt)}
+                    </div>
+                    {folder.assignments && folder.assignments.length > 0 && (
+                      <div className="flex gap-1">
+                        {folder.assignments.slice(0, 2).map((assignment, i) => (
+                          <AssignmentBadge key={i} assignment={assignment} />
+                        ))}
+                        {folder.assignments.length > 2 && (
+                          <Badge variant="secondary" className="text-xs">
+                            +{folder.assignments.length - 2}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+                    {!isReadOnly && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                          <Button variant="ghost" size="icon">
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEditFolder(folder); }}>
+                            <Edit className="w-4 h-4 mr-2" />
+                            Modifier
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openAssignDialog("folder", folder); }}>
+                            <Share2 className="w-4 h-4 mr-2" />
+                            Assigner
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }}
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Supprimer
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            /* Compact view - SharePoint style table for folders */
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-muted/50">
+                  <tr className="text-left text-sm">
+                    <th className="px-4 py-3 font-medium">Nom</th>
+                    <th className="px-4 py-3 font-medium hidden md:table-cell">Date de création</th>
+                    <th className="px-4 py-3 font-medium hidden sm:table-cell">Fichiers</th>
+                    <th className="px-4 py-3 font-medium hidden lg:table-cell">Assignations</th>
+                    <th className="px-4 py-3 font-medium text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {filteredFolders.map((folder) => (
+                    <tr 
+                      key={folder.id} 
+                      className="hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => setSelectedFolder(folder)}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-8 h-8 rounded flex items-center justify-center"
+                            style={{ backgroundColor: folder.color + "20" }}
+                          >
+                            <Folder className="w-4 h-4" style={{ color: folder.color }} />
+                          </div>
+                          <span className="font-medium hover:text-primary">{folder.name}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-muted-foreground hidden md:table-cell">
+                        {formatDate(folder.createdAt)}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-muted-foreground hidden sm:table-cell">
+                        {folder.filesCount}
+                      </td>
+                      <td className="px-4 py-3 hidden lg:table-cell">
+                        <div className="flex gap-1 flex-wrap">
+                          {folder.assignments?.slice(0, 2).map((assignment, i) => (
+                            <AssignmentBadge key={i} assignment={assignment} />
+                          ))}
+                          {folder.assignments && folder.assignments.length > 2 && (
+                            <Badge variant="secondary" className="text-xs">
+                              +{folder.assignments.length - 2}
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {!isReadOnly && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreVertical className="w-4 h-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEditFolder(folder); }}>
+                                <Edit className="w-4 h-4 mr-2" />
+                                Modifier
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openAssignDialog("folder", folder); }}>
+                                <Share2 className="w-4 h-4 mr-2" />
+                                Assigner
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="text-destructive"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }}
+                              >
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                Supprimer
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       {/* Create Folder Dialog */}
       <Dialog open={isCreateFolderOpen} onOpenChange={setIsCreateFolderOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create New Folder</DialogTitle>
+            <DialogTitle>Créer un nouveau dossier</DialogTitle>
             <DialogDescription>
-              Create a folder to organize your documents. You can assign it to vessels or users later.
+              Créez un dossier pour organiser vos documents. Assignez-le à un navire pour restreindre l'accès.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="folderName">Folder Name</Label>
+              <Label htmlFor="folderName">Nom du dossier</Label>
               <Input
                 id="folderName"
-                placeholder="e.g., Security Documents"
+                placeholder="ex: Documents de sécurité"
                 value={newFolder.name}
                 onChange={(e) => setNewFolder({ ...newFolder, name: e.target.value })}
               />
             </div>
             <div className="space-y-2">
-              <Label>Folder Color</Label>
+              <Label htmlFor="folderVessel">Navire assigné</Label>
+              <Select
+                value={newFolder.vesselId || "none"}
+                onValueChange={(value) => setNewFolder({ ...newFolder, vesselId: value === "none" ? "" : value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Sélectionner un navire" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Company (tous accès)</SelectItem>
+                  {vessels.map((vessel) => (
+                    <SelectItem key={vessel.id} value={vessel.id}>
+                      {vessel.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Les capitaines ne voient que les dossiers de leur navire
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Couleur du dossier</Label>
               <div className="flex flex-wrap gap-2">
                 {FOLDER_COLORS.map((color) => (
                   <button
@@ -1050,10 +1537,10 @@ export function DocumentsContent() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsCreateFolderOpen(false)}>
-              Cancel
+              Annuler
             </Button>
             <Button onClick={handleCreateFolder} disabled={!newFolder.name}>
-              Create Folder
+              Créer le dossier
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1063,14 +1550,14 @@ export function DocumentsContent() {
       <Dialog open={isEditFolderOpen} onOpenChange={setIsEditFolderOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Folder</DialogTitle>
+            <DialogTitle>Modifier le dossier</DialogTitle>
             <DialogDescription>
-              Update folder name and color.
+              Modifiez le nom, la couleur et l'assignation du dossier.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="editFolderName">Folder Name</Label>
+              <Label htmlFor="editFolderName">Nom du dossier</Label>
               <Input
                 id="editFolderName"
                 value={newFolder.name}
@@ -1078,7 +1565,26 @@ export function DocumentsContent() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Folder Color</Label>
+              <Label htmlFor="editFolderVessel">Navire assigné</Label>
+              <Select
+                value={newFolder.vesselId || "none"}
+                onValueChange={(value) => setNewFolder({ ...newFolder, vesselId: value === "none" ? "" : value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Sélectionner un navire" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Company (tous accès)</SelectItem>
+                  {vessels.map((vessel) => (
+                    <SelectItem key={vessel.id} value={vessel.id}>
+                      {vessel.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Couleur du dossier</Label>
               <div className="flex flex-wrap gap-2">
                 {FOLDER_COLORS.map((color) => (
                   <button
@@ -1100,10 +1606,10 @@ export function DocumentsContent() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditFolderOpen(false)}>
-              Cancel
+              Annuler
             </Button>
             <Button onClick={handleUpdateFolder} disabled={!newFolder.name}>
-              Save Changes
+              Enregistrer
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1164,7 +1670,7 @@ export function DocumentsContent() {
                     <SelectValue placeholder="Choose a vessel" />
                   </SelectTrigger>
                   <SelectContent>
-                    {mockVessels.map((vessel) => (
+                    {vessels.map((vessel) => (
                       <SelectItem key={vessel.id} value={vessel.id}>
                         {vessel.name}
                       </SelectItem>
@@ -1185,9 +1691,9 @@ export function DocumentsContent() {
                     <SelectValue placeholder="Choose a user" />
                   </SelectTrigger>
                   <SelectContent>
-                    {mockUsers.map((user) => (
+                    {users.map((user) => (
                       <SelectItem key={user.id} value={user.id}>
-                        {user.name} ({user.role})
+                        {user.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1207,325 +1713,9 @@ export function DocumentsContent() {
             </Button>
             <Button
               onClick={handleAddAssignment}
-              disabled={!assignmentForm.targetId && assignmentForm.type !== "company"}
+              disabled={!assignmentForm.type || (!assignmentForm.targetId && assignmentForm.type !== "company")}
             >
               Assign
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Preview Dialog */}
-      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {previewFile && (
-                <>
-                  {(() => {
-                    const Icon = getFileIcon(previewFile.type)
-                    return <Icon className="w-5 h-5" />
-                  })()}
-                  {previewFile.name}
-                </>
-              )}
-            </DialogTitle>
-            <DialogDescription>
-              {previewFile && (
-                <span className="flex items-center gap-4">
-                  <span>{previewFile.size}</span>
-                  <span>•</span>
-                  <span>Uploaded by {previewFile.uploadedBy}</span>
-                  <span>•</span>
-                  <span>{formatDate(previewFile.uploadedAt)}</span>
-                  {previewFile.expirationDate && (
-                    <>
-                      <span>•</span>
-                      <span className={cn(
-                        getExpirationStatus(previewFile.expirationDate) === "expired" && "text-destructive",
-                        getExpirationStatus(previewFile.expirationDate) === "expiring" && "text-orange-600"
-                      )}>
-                        Expires: {formatDate(previewFile.expirationDate)}
-                      </span>
-                    </>
-                  )}
-                </span>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          
-          {previewFile && (
-            <Tabs defaultValue="preview" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="preview">Preview</TabsTrigger>
-                <TabsTrigger value="notes">Notes ({previewFile.notes.length})</TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="preview" className="mt-4">
-                <div className="border rounded-lg min-h-[400px] bg-muted/30 overflow-hidden">
-                  {/* Excel/CSV Preview with spreadsheet data */}
-                  {previewFile.spreadsheetData ? (
-                    <div className="p-4 space-y-4">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <TableIcon className="w-4 h-4" />
-                        <span>
-                          {previewFile.spreadsheetData.rows.length} rows × {previewFile.spreadsheetData.headers.length} columns
-                        </span>
-                        {previewFile.spreadsheetData.sheetNames && previewFile.spreadsheetData.sheetNames.length > 1 && (
-                          <Badge variant="secondary">
-                            Sheet: {previewFile.spreadsheetData.activeSheet || previewFile.spreadsheetData.sheetNames[0]}
-                          </Badge>
-                        )}
-                      </div>
-                      <ScrollArea className="h-[450px] rounded-md border">
-                        <Table>
-                          <TableHeader className="sticky top-0 bg-background">
-                            <TableRow>
-                              <TableHead className="w-12 text-center bg-muted">#</TableHead>
-                              {previewFile.spreadsheetData.headers.map((header, idx) => (
-                                <TableHead key={idx} className="font-semibold bg-muted">
-                                  {header || `Column ${idx + 1}`}
-                                </TableHead>
-                              ))}
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {previewFile.spreadsheetData.rows.slice(0, 100).map((row, rowIdx) => (
-                              <TableRow key={rowIdx} className="hover:bg-muted/50">
-                                <TableCell className="text-center text-muted-foreground text-xs">
-                                  {rowIdx + 1}
-                                </TableCell>
-                                {row.map((cell, cellIdx) => (
-                                  <TableCell key={cellIdx} className="max-w-[200px] truncate">
-                                    {cell !== null && cell !== undefined ? String(cell) : ""}
-                                  </TableCell>
-                                ))}
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                        <ScrollBar orientation="horizontal" />
-                      </ScrollArea>
-                      {previewFile.spreadsheetData.rows.length > 100 && (
-                        <p className="text-xs text-muted-foreground text-center">
-                          Showing first 100 rows of {previewFile.spreadsheetData.rows.length}
-                        </p>
-                      )}
-                    </div>
-                  ) : previewFile.url ? (
-                    // If file has a URL, show actual preview
-                    previewFile.type === "image" ? (
-                      <img
-                        src={previewFile.url}
-                        alt={previewFile.name}
-                        className="w-full h-auto max-h-[500px] object-contain"
-                      />
-                    ) : previewFile.type === "pdf" ? (
-                      <iframe
-                        src={previewFile.url}
-                        className="w-full h-[500px] border-0"
-                        title={previewFile.name}
-                      />
-                    ) : (
-                      <div className="p-8 flex flex-col items-center justify-center h-[400px]">
-                        <File className="w-24 h-24 text-muted-foreground mb-4" />
-                        <p className="text-sm text-muted-foreground">
-                          Download to view this file
-                        </p>
-                      </div>
-                    )
-                  ) : (
-                    // No URL - show file info card instead
-                    <div className="p-6 space-y-6">
-                      {/* File icon and type */}
-                      <div className="flex items-center gap-4 pb-4 border-b">
-                        <div className={cn(
-                          "p-4 rounded-xl",
-                          previewFile.type === "pdf" && "bg-red-100 dark:bg-red-950",
-                          previewFile.type === "image" && "bg-blue-100 dark:bg-blue-950",
-                          previewFile.type === "excel" && "bg-green-100 dark:bg-green-950",
-                          previewFile.type === "word" && "bg-blue-100 dark:bg-blue-950",
-                          previewFile.type === "other" && "bg-gray-100 dark:bg-gray-900"
-                        )}>
-                          {(() => {
-                            const Icon = getFileIcon(previewFile.type)
-                            return <Icon className={cn(
-                              "w-12 h-12",
-                              previewFile.type === "pdf" && "text-red-600",
-                              previewFile.type === "image" && "text-blue-600",
-                              previewFile.type === "excel" && "text-green-600",
-                              previewFile.type === "word" && "text-blue-600",
-                              previewFile.type === "other" && "text-gray-600"
-                            )} />
-                          })()}
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-lg">{previewFile.name}</h3>
-                          <p className="text-sm text-muted-foreground uppercase">{previewFile.type} file</p>
-                        </div>
-                      </div>
-
-                      {/* File details grid */}
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground uppercase tracking-wider">Size</p>
-                          <p className="font-medium">{previewFile.size}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground uppercase tracking-wider">Type</p>
-                          <p className="font-medium">{previewFile.mimeType}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground uppercase tracking-wider">Uploaded By</p>
-                          <p className="font-medium">{previewFile.uploadedBy}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs text-muted-foreground uppercase tracking-wider">Upload Date</p>
-                          <p className="font-medium">{formatDate(previewFile.uploadedAt)}</p>
-                        </div>
-                        {previewFile.expirationDate && (
-                          <div className="space-y-1 col-span-2">
-                            <p className="text-xs text-muted-foreground uppercase tracking-wider">Expiration</p>
-                            <p className={cn(
-                              "font-medium flex items-center gap-2",
-                              getExpirationStatus(previewFile.expirationDate) === "expired" && "text-destructive",
-                              getExpirationStatus(previewFile.expirationDate) === "expiring" && "text-orange-600"
-                            )}>
-                              <Calendar className="w-4 h-4" />
-                              {formatDate(previewFile.expirationDate)}
-                              {getExpirationStatus(previewFile.expirationDate) === "expired" && (
-                                <Badge variant="destructive">Expired</Badge>
-                              )}
-                              {getExpirationStatus(previewFile.expirationDate) === "expiring" && (
-                                <Badge variant="outline" className="border-orange-500 text-orange-600">Expires Soon</Badge>
-                              )}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Assignments */}
-                      {previewFile.assignments.length > 0 && (
-                        <div className="space-y-2 pt-4 border-t">
-                          <p className="text-xs text-muted-foreground uppercase tracking-wider">Shared With</p>
-                          <div className="flex flex-wrap gap-2">
-                            {previewFile.assignments.map((assignment, index) => (
-                              <AssignmentBadge key={index} assignment={assignment} />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Summary from notes */}
-                      {previewFile.notes.length > 0 && previewFile.notes[0].summary && (
-                        <div className="space-y-2 pt-4 border-t">
-                          <p className="text-xs text-muted-foreground uppercase tracking-wider">File Summary</p>
-                          <p className="text-sm italic bg-muted/50 p-3 rounded-lg">
-                            {previewFile.notes[0].summary}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="notes" className="mt-4">
-                <ScrollArea className="h-[400px] pr-4">
-                  {previewFile.notes.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-[300px] text-muted-foreground">
-                      <StickyNote className="w-12 h-12 mb-4" />
-                      <p className="text-lg font-medium mb-2">No notes yet</p>
-                      <Button onClick={() => { setIsPreviewOpen(false); openAddNote(previewFile); }}>
-                        <Plus className="w-4 h-4 mr-2" />
-                        Add Note
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {previewFile.notes.map((note) => (
-                        <Card key={note.id}>
-                          <CardContent className="p-4">
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <Badge variant={getPriorityColor(note.priority)}>
-                                  {note.priority}
-                                </Badge>
-                                <h4 className="font-semibold">{note.title}</h4>
-                              </div>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="icon" className="h-8 w-8">
-                                    <MoreVertical className="w-4 h-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem onClick={() => { setIsPreviewOpen(false); openEditNote(previewFile, note); }}>
-                                    <Edit className="w-4 h-4 mr-2" />
-                                    Edit
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    className="text-destructive"
-                                    onClick={() => handleDeleteNote(previewFile, note.id)}
-                                  >
-                                    <Trash2 className="w-4 h-4 mr-2" />
-                                    Delete
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                            <p className="text-sm text-muted-foreground mb-2">{note.content}</p>
-                            {note.summary && (
-                              <div className="bg-muted/50 rounded p-2 mb-2">
-                                <p className="text-xs font-medium text-muted-foreground mb-1">Summary:</p>
-                                <p className="text-sm italic">{note.summary}</p>
-                              </div>
-                            )}
-                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                              <span className="flex items-center gap-1">
-                                <User className="w-3 h-3" />
-                                {note.createdBy}
-                              </span>
-                              <span className="flex items-center gap-1">
-                                <Calendar className="w-3 h-3" />
-                                {formatDate(note.createdAt)}
-                              </span>
-                              {note.expirationDate && (
-                                <span className={cn(
-                                  "flex items-center gap-1",
-                                  getExpirationStatus(note.expirationDate) === "expired" && "text-destructive",
-                                  getExpirationStatus(note.expirationDate) === "expiring" && "text-orange-600"
-                                )}>
-                                  <Clock className="w-3 h-3" />
-                                  Expires: {formatDate(note.expirationDate)}
-                                </span>
-                              )}
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                      <Button
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => { setIsPreviewOpen(false); openAddNote(previewFile); }}
-                      >
-                        <Plus className="w-4 h-4 mr-2" />
-                        Add Note
-                      </Button>
-                    </div>
-                  )}
-                </ScrollArea>
-              </TabsContent>
-            </Tabs>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsPreviewOpen(false)}>
-              Close
-            </Button>
-            <Button>
-              <Download className="w-4 h-4 mr-2" />
-              Download
             </Button>
           </DialogFooter>
         </DialogContent>

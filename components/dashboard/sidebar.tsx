@@ -1,8 +1,8 @@
 "use client"
 
-import { LayoutDashboard, Ship, Shield, Users, FileStack, Settings, HelpCircle, LogOut, ChevronLeft, ChevronRight, Anchor } from "lucide-react"
+import { LayoutDashboard, Ship, Shield, Users, FileStack, Settings, HelpCircle, LogOut, ChevronLeft, ChevronRight, ShoppingCart, Anchor, ClipboardList } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useState, createContext, useContext } from "react"
+import { useState, createContext, useContext, useEffect } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -19,18 +19,28 @@ const SidebarContext = createContext<{
 
 export const useSidebar = () => useContext(SidebarContext)
 
-const menuItems = [
-  { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
-  { icon: Ship, label: "Vessels", href: "/vessels" },
-  { icon: Shield, label: "Roles", href: "/roles" },
-  { icon: Users, label: "Users", href: "/users" },
-  { icon: FileStack, label: "Documents", href: "/documents" },
+// Shore-based roles (office)
+const SHORE_ROLES = ["ADMIN", "CSO", "DPA", "OPS", "FINANCE", "COMPTABILITE", "DIRECTION_TECHNIQUE", "DIRECTION_GENERALE", "COMMERCIAL"]
+// Vessel-based roles (crew)
+const VESSEL_ROLES = ["CAPITAINE", "CHIEF_MATE", "CHEF_MECANICIEN", "SECOND", "YOTNA"]
+// All roles
+const ALL_ROLES = [...SHORE_ROLES, ...VESSEL_ROLES]
+
+// Define all menu items with role access
+const allMenuItems = [
+  { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard", roles: SHORE_ROLES },
+  { icon: Ship, label: "Vessels", href: "/vessels", roles: SHORE_ROLES },
+  { icon: Shield, label: "Roles", href: "/roles", roles: ["ADMIN"] },
+  { icon: Users, label: "Users", href: "/users", roles: ["ADMIN", "OPS", "DPA"] },
+  { icon: FileStack, label: "Documents CSO", href: "/documentscso", roles: [...SHORE_ROLES, ...VESSEL_ROLES] },
+  { icon: ShoppingCart, label: "Purchase Requests", href: "/purchase-requests", roles: ALL_ROLES },
+  { icon: ClipboardList, label: "Bons de Commande", href: "/purchase-orders", roles: VESSEL_ROLES },
 ]
 
-const generalItems = [
-  { icon: Settings, label: "Settings", href: "/settings" },
-  { icon: HelpCircle, label: "Help", href: "/help" },
-  { icon: LogOut, label: "Logout", href: "/logout", danger: true },
+const allGeneralItems = [
+  { icon: Settings, label: "Settings", href: "/settings", roles: SHORE_ROLES },
+  { icon: HelpCircle, label: "Help", href: "/help", roles: ALL_ROLES },
+  { icon: LogOut, label: "Logout", href: "/logout", danger: true, roles: ALL_ROLES },
 ]
 
 function NavItem({ 
@@ -38,7 +48,7 @@ function NavItem({
   isActive, 
   isCollapsed 
 }: { 
-  item: typeof menuItems[0] & { danger?: boolean }
+  item: typeof allMenuItems[0] & { danger?: boolean }
   isActive: boolean
   isCollapsed: boolean 
 }) {
@@ -83,6 +93,38 @@ function NavItem({
 
 export function Sidebar({ isCollapsed = false, onToggle }: { isCollapsed?: boolean; onToggle?: () => void } = {}) {
   const pathname = usePathname()
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const [userVessel, setUserVessel] = useState<{ id: string; name: string } | null>(null)
+  const [userName, setUserName] = useState<string | null>(null)
+
+  useEffect(() => {
+    const fetchCurrentUser = async () => {
+      try {
+        const response = await fetch("/api/auth/session")
+        if (response.ok) {
+          const data = await response.json()
+          if (data.user?.role) {
+            setUserRole(data.user.role)
+            setUserName(data.user.name || null)
+            setUserVessel(data.user.vessel || null)
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch user role:", error)
+      }
+    }
+    fetchCurrentUser()
+  }, [])
+
+  const isVesselRole = userRole && VESSEL_ROLES.includes(userRole)
+
+  // Filter menu items based on user role
+  const menuItems = allMenuItems.filter(item => 
+    userRole && item.roles.includes(userRole)
+  )
+  const generalItems = allGeneralItems.filter(item => 
+    userRole && item.roles.includes(userRole)
+  )
 
   return (
     <TooltipProvider>
@@ -113,6 +155,35 @@ export function Sidebar({ isCollapsed = false, onToggle }: { isCollapsed?: boole
             </Link>
           )}
         </div>
+
+        {/* Vessel Info for Vessel Roles */}
+        {isVesselRole && userVessel && !isCollapsed && (
+          <div className="px-4 py-3 border-b border-border/50 bg-blue-50/50 dark:bg-blue-950/20">
+            <div className="flex items-center gap-2">
+              <Ship className="w-4 h-4 text-blue-600" />
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">Navire</p>
+                <p className="text-sm font-semibold text-blue-600">{userVessel.name}</p>
+              </div>
+            </div>
+            {userName && (
+              <p className="text-xs text-muted-foreground mt-1 truncate">{userName}</p>
+            )}
+          </div>
+        )}
+        {isVesselRole && userVessel && isCollapsed && (
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <div className="flex justify-center py-3 border-b border-border/50 bg-blue-50/50 dark:bg-blue-950/20">
+                <Ship className="w-5 h-5 text-blue-600" />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="font-medium">
+              <p>{userVessel.name}</p>
+              {userName && <p className="text-xs text-muted-foreground">{userName}</p>}
+            </TooltipContent>
+          </Tooltip>
+        )}
 
         {/* Navigation */}
         <div className="flex-1 overflow-y-auto py-4 px-3">

@@ -1,0 +1,441 @@
+// ===========================================
+// VesselMS Database Schema
+// ===========================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================
+// ENUMS
+// ===========================================
+
+enum UserRole {
+  ADMIN
+  CSO
+  DPA
+  OPS
+  FINANCE
+  COMPTABILITE
+  DIRECTION_TECHNIQUE
+  DIRECTION_GENERALE
+  CAPITAINE
+  CHIEF_MATE
+  CHEF_MECANICIEN
+  SECOND
+  YOTNA
+  COMMERCIAL
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum VesselStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+  DECOMMISSIONED
+}
+
+enum PRPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum PRCategory {
+  SPARE_PARTS
+  CONSUMABLES
+  SAFETY_EQUIPMENT
+  TOOLS
+  LUBRICANTS
+  OTHER
+}
+
+enum POStatus {
+  DRAFT
+  VALIDATED
+  SENT
+  DELIVERED
+  CANCELLED
+}
+
+enum DocumentStatus {
+  ACTIVE
+  EXPIRED
+  PENDING_REVIEW
+}
+
+enum NotePriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// ===========================================
+// USER & AUTHENTICATION
+// ===========================================
+
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  password      String
+  name          String
+  role          UserRole   @default(CAPITAINE)
+  status        UserStatus @default(ACTIVE)
+  avatar        String?
+  phone         String?
+  
+  // Relations
+  vesselId      String?
+  vessel        Vessel?    @relation(fields: [vesselId], references: [id])
+  
+  // Timestamps
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  lastLoginAt   DateTime?
+
+  // Relations
+  purchaseRequests          PurchaseRequest[] @relation("CreatedPurchaseRequests")
+  masterApprovedPRs         PurchaseRequest[] @relation("MasterApprovedPR")
+  quotationSentPRs          PurchaseRequest[] @relation("QuotationSentPR")
+  createdPurchaseOrders     PurchaseOrder[]   @relation("CreatedPurchaseOrders")
+  documents         Document[]
+  documentFolders   DocumentFolder[]
+  fileNotes         FileNote[]
+  sessions          Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// ===========================================
+// VESSELS
+// ===========================================
+
+model Vessel {
+  id          String       @id @default(cuid())
+  name        String
+  imo         String       @unique
+  flag        String?
+  type        String?
+  grossTonnage Float?
+  status      VesselStatus @default(ACTIVE)
+  
+  // Timestamps
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  users             User[]
+  purchaseRequests  PurchaseRequest[]
+  documents         Document[]
+  documentFolders   DocumentFolder[]
+
+  @@map("vessels")
+}
+
+// ===========================================
+// ROLES & PERMISSIONS
+// ===========================================
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  module      String   // e.g., "vessels", "documents", "purchase_requests"
+  action      String   // e.g., "create", "read", "update", "delete"
+  
+  // Relations
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ===========================================
+// PURCHASE REQUESTS
+// ===========================================
+
+model PurchaseRequest {
+  id              String     @id @default(cuid())
+  reference       String     @unique
+  customReference String?    // Optional user-provided reference
+  category        PRCategory
+  priority        PRPriority @default(MEDIUM)
+  notes           String?
+  vesselName  String?    // Preserved vessel name when vessel is deleted
+  createdByName String?  // Preserved user name when user is deleted
+  
+  // Master approval indicator (set by captain/master)
+  masterApproved     Boolean    @default(false)
+  masterApprovedById String?
+  masterApprovedBy   User?      @relation("MasterApprovedPR", fields: [masterApprovedById], references: [id], onDelete: SetNull)
+  masterApprovedAt   DateTime?
+  
+  // Quotation workflow
+  sentToQuotation     Boolean    @default(false)
+  quotationSentAt     DateTime?
+  quotationSentById   String?
+  quotationSentBy     User?      @relation("QuotationSentPR", fields: [quotationSentById], references: [id], onDelete: SetNull)
+  quotationCompletedAt DateTime?
+  quotationRemark     String?    // General remark for the quotation
+  
+  // Relations
+  createdById String?
+  createdBy   User?      @relation("CreatedPurchaseRequests", fields: [createdById], references: [id], onDelete: SetNull)
+  vesselId    String?
+  vessel      Vessel?    @relation(fields: [vesselId], references: [id], onDelete: SetNull)
+  
+  // Timestamps
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  products       PRProduct[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("purchase_requests")
+}
+
+model PRProduct {
+  id                String          @id @default(cuid())
+  name              String
+  quantity          Int
+  unit              String
+  reference         String?         // Product-specific reference
+  description       String?
+  estimatedPrice    Float?
+  rob               Int?            // Reste on Board (current stock)
+  images            String[]        // Array of image URLs
+  
+  // Quotation fields (filled by admin)
+  quotedPrice       Float?          // Price quoted by supplier
+  supplierName      String?         // Supplier name for this item
+  remark            String?         // Remark for this item
+  unavailableReason String?         // OUT_OF_STOCK or NO_OFFER - null means available
+  wasUnavailable    Boolean         @default(false) // Track if product was ever unavailable
+  
+  // Relations
+  purchaseRequestId String
+  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+
+  // Relation to PO product if validated
+  poProducts    POProduct[]
+
+  @@map("pr_products")
+}
+
+// ===========================================
+// PURCHASE ORDERS (Bon de Commande)
+// ===========================================
+
+model PurchaseOrder {
+  id          String     @id @default(cuid())
+  reference   String     @unique  // BC-2026-001
+  status      POStatus   @default(DRAFT)
+  notes       String?
+  
+  // Relations
+  purchaseRequestId String
+  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  createdById       String?
+  createdBy         User?           @relation("CreatedPurchaseOrders", fields: [createdById], references: [id], onDelete: SetNull)
+  
+  // Timestamps
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  products    POProduct[]
+
+  @@map("purchase_orders")
+}
+
+model POProduct {
+  id                  String        @id @default(cuid())
+  name                String
+  originalQuantity    Int           // Quantity from PR
+  validatedQuantity   Int           // Quantity validated by direction/ops
+  unit                String
+  quotedPrice         Float?
+  supplierName        String?
+  remark              String?       // Remark from direction/ops
+  
+  // Relations
+  purchaseOrderId     String
+  purchaseOrder       PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  prProductId         String?       // Reference to original PR product
+  prProduct           PRProduct?    @relation(fields: [prProductId], references: [id], onDelete: SetNull)
+
+  @@map("po_products")
+}
+
+// ===========================================
+// DOCUMENTS
+// ===========================================
+
+model DocumentFolder {
+  id          String   @id @default(cuid())
+  name        String
+  color       String   @default("#3b82f6")
+  createdByName String? // Preserved user name when user is deleted
+  
+  // Relations
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  vesselId    String?
+  vessel      Vessel?  @relation(fields: [vesselId], references: [id])
+  parentId    String?
+  parent      DocumentFolder?  @relation("FolderHierarchy", fields: [parentId], references: [id])
+  children    DocumentFolder[] @relation("FolderHierarchy")
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  documents   Document[]
+  assignments FolderAssignment[]
+
+  @@map("document_folders")
+}
+
+model Document {
+  id             String         @id @default(cuid())
+  name           String
+  type           String         // pdf, image, excel, word, other
+  mimeType       String
+  size           Int            // in bytes
+  path           String         // MinIO path
+  status         DocumentStatus @default(ACTIVE)
+  expirationDate DateTime?
+  spreadsheetData Json?         // Parsed spreadsheet data for Excel/CSV preview
+  
+  uploadedByName String?        // Preserved user name when user is deleted
+  
+  // Relations
+  folderId       String
+  folder         DocumentFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  uploadedById   String?
+  uploadedBy     User?          @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  vesselId       String?
+  vessel         Vessel?        @relation(fields: [vesselId], references: [id])
+  
+  // Timestamps
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  // Relations
+  notes          FileNote[]
+  assignments    DocumentAssignment[]
+
+  @@map("documents")
+}
+
+model FileNote {
+  id             String       @id @default(cuid())
+  title          String
+  content        String
+  summary        String?
+  priority       NotePriority @default(MEDIUM)
+  expirationDate DateTime?
+  createdByName  String?      // Preserved user name when user is deleted
+  
+  // Relations
+  documentId     String
+  document       Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdById    String?
+  createdBy      User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  
+  // Timestamps
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("file_notes")
+}
+
+// Assignment tables for documents/folders to vessels, company, or users
+model FolderAssignment {
+  id         String         @id @default(cuid())
+  folderId   String
+  folder     DocumentFolder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  targetType String         // "vessel", "company", "user"
+  targetId   String
+  
+  @@unique([folderId, targetType, targetId])
+  @@map("folder_assignments")
+}
+
+model DocumentAssignment {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  targetType String   // "vessel", "company", "user"
+  targetId   String
+  
+  @@unique([documentId, targetType, targetId])
+  @@map("document_assignments")
+}
+
+// ===========================================
+// AUDIT LOG
+// ===========================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entity     String   // e.g., "User", "Vessel", "PurchaseRequest"
+  entityId   String?
+  oldValues  Json?
+  newValues  Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@map("audit_logs")
+}

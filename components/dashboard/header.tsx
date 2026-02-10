@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { MobileNav } from "./mobile-nav"
-import type { ReactNode } from "react"
+import { useState, useEffect, type ReactNode } from "react"
 
 interface HeaderProps {
   title: string
@@ -13,7 +13,50 @@ interface HeaderProps {
   actions?: ReactNode
 }
 
+interface CurrentUser {
+  id: string
+  name: string
+  email: string
+  avatar?: string
+  role: string
+}
+
 export function Header({ title, description, actions }: HeaderProps) {
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const response = await fetch("/api/auth/session")
+        if (response.ok) {
+          const data = await response.json()
+          if (data.authenticated && data.user) {
+            setCurrentUser({
+              id: data.user.id,
+              name: data.user.name,
+              email: data.user.email,
+              avatar: data.user.avatar,
+              role: data.user.role,
+            })
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch user:", error)
+      }
+    }
+    fetchUser()
+  }, [])
+
+  // Get initials from name
+  const getInitials = (name: string) => {
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2)
+  }
+
   return (
     <header className="space-y-6">
       {/* Top bar with search and actions */}
@@ -55,14 +98,14 @@ export function Header({ title, description, actions }: HeaderProps) {
           {/* User profile */}
           <div className="flex items-center gap-3 pl-3 ml-2 border-l border-border/50">
             <Avatar className="w-9 h-9 ring-2 ring-primary/10 transition-all hover:ring-primary/30">
-              <AvatarImage src="/profile.jpg" alt="Admin User" />
+              <AvatarImage src={currentUser?.avatar || "/profile.jpg"} alt={currentUser?.name || "User"} />
               <AvatarFallback className="text-xs bg-gradient-to-br from-primary to-primary/80 text-primary-foreground font-semibold">
-                AD
+                {currentUser?.name ? getInitials(currentUser.name) : "U"}
               </AvatarFallback>
             </Avatar>
             <div className="hidden lg:block">
-              <p className="text-sm font-semibold text-foreground leading-tight">Admin User</p>
-              <p className="text-xs text-muted-foreground">admin@veceel.com</p>
+              <p className="text-sm font-semibold text-foreground leading-tight">{currentUser?.name || "Utilisateur"}</p>
+              <p className="text-xs text-muted-foreground">{currentUser?.email || ""}</p>
             </div>
           </div>
         </div>

@@ -30,25 +30,63 @@ import { cn } from "@/lib/utils"
 import type { SpreadsheetData } from "@/types"
 import * as XLSX from "xlsx"
 
+// Format file size from bytes to human-readable format
+const formatFileSize = (bytes: number | string): string => {
+  if (typeof bytes === 'string') return bytes // Already formatted
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
 function PreviewContent() {
   const searchParams = useSearchParams()
   const [fileData, setFileData] = useState<{
+    id?: string
     name: string
-    size: string
+    size: number | string
     type: string
     mimeType: string
     uploadedBy: string
     uploadedAt: string
+    path?: string // Server path like /uploads/xxx.pdf
     spreadsheetData?: SpreadsheetData
   } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [spreadsheetData, setSpreadsheetData] = useState<SpreadsheetData | null>(null)
 
   useEffect(() => {
     // Get file data from sessionStorage (set before opening this window)
     const storedData = sessionStorage.getItem("previewFileData")
     if (storedData) {
       try {
-        setFileData(JSON.parse(storedData))
+        const data = JSON.parse(storedData)
+        setFileData(data)
+        
+        // If it's an Excel/CSV file, fetch and parse it
+        if ((data.type === 'excel' || data.name?.endsWith('.csv')) && data.path) {
+          fetch(data.path)
+            .then(res => res.arrayBuffer())
+            .then(buffer => {
+              const workbook = XLSX.read(buffer, { type: "array" })
+              const sheetName = workbook.SheetNames[0]
+              const worksheet = workbook.Sheets[sheetName]
+              const jsonData = XLSX.utils.sheet_to_json<(string | number | null)[]>(worksheet, { header: 1 })
+              
+              if (jsonData.length > 0) {
+                const headers = (jsonData[0] as (string | number | null)[]).map(h => String(h || ""))
+                const rows = jsonData.slice(1, 101) // Limit to 100 rows
+                setSpreadsheetData({
+                  headers,
+                  rows,
+                  sheetNames: workbook.SheetNames,
+                  activeSheet: sheetName,
+                })
+              }
+            })
+            .catch(err => console.error("Failed to parse spreadsheet:", err))
+        }
       } catch (e) {
         console.error("Failed to parse file data", e)
       }
@@ -72,7 +110,10 @@ function PreviewContent() {
   }
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("fr-FR", {
+    if (!dateString) return "N/A"
+    const date = new Date(dateString)
+    if (isNaN(date.getTime())) return "Invalid Date"
+    return date.toLocaleDateString("fr-FR", {
       day: "2-digit",
       month: "short",
       year: "numeric",
@@ -144,7 +185,7 @@ function PreviewContent() {
                   <div className="flex items-center gap-3 text-sm text-muted-foreground">
                     <span className="flex items-center gap-1">
                       <HardDrive className="w-3 h-3" />
-                      {fileData.size}
+                      {formatFileSize(fileData.size)}
                     </span>
                     <span>•</span>
                     <span className="flex items-center gap-1">
@@ -175,7 +216,7 @@ function PreviewContent() {
 
       {/* Content */}
       <div className="container mx-auto px-4 py-6">
-        {fileData.spreadsheetData ? (
+        {spreadsheetData ? (
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -185,11 +226,11 @@ function PreviewContent() {
                 </CardTitle>
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary">
-                    {fileData.spreadsheetData.rows.length} rows × {fileData.spreadsheetData.headers.length} columns
+                    {spreadsheetData.rows.length} rows × {spreadsheetData.headers.length} columns
                   </Badge>
-                  {fileData.spreadsheetData.sheetNames && fileData.spreadsheetData.sheetNames.length > 1 && (
+                  {spreadsheetData.sheetNames && spreadsheetData.sheetNames.length > 1 && (
                     <Badge variant="outline">
-                      Sheet: {fileData.spreadsheetData.activeSheet || fileData.spreadsheetData.sheetNames[0]}
+                      Sheet: {spreadsheetData.activeSheet || spreadsheetData.sheetNames[0]}
                     </Badge>
                   )}
                 </div>
@@ -201,7 +242,7 @@ function PreviewContent() {
                   <TableHeader className="sticky top-0 bg-muted/80 backdrop-blur-sm">
                     <TableRow>
                       <TableHead className="w-14 text-center font-bold">#</TableHead>
-                      {fileData.spreadsheetData.headers.map((header, idx) => (
+                      {spreadsheetData.headers.map((header, idx) => (
                         <TableHead key={idx} className="font-semibold min-w-[120px]">
                           {header || `Column ${idx + 1}`}
                         </TableHead>
@@ -209,7 +250,7 @@ function PreviewContent() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {fileData.spreadsheetData.rows.map((row, rowIdx) => (
+                    {spreadsheetData.rows.map((row, rowIdx) => (
                       <TableRow key={rowIdx} className="hover:bg-muted/50">
                         <TableCell className="text-center text-muted-foreground text-xs font-mono">
                           {rowIdx + 1}
@@ -229,6 +270,26 @@ function PreviewContent() {
               </ScrollArea>
             </CardContent>
           </Card>
+        ) : fileData.type === "pdf" && fileData.path ? (
+          <Card className="overflow-hidden">
+            <CardContent className="p-0">
+              <iframe 
+                src={fileData.path}
+                className="w-full h-[calc(100vh-180px)] border-0"
+                title={fileData.name}
+              />
+            </CardContent>
+          </Card>
+        ) : fileData.type === "image" && fileData.path ? (
+          <Card>
+            <CardContent className="p-6 flex items-center justify-center">
+              <img 
+                src={fileData.path}
+                alt={fileData.name}
+                className="max-w-full max-h-[calc(100vh-220px)] object-contain rounded-lg shadow-lg"
+              />
+            </CardContent>
+          </Card>
         ) : (
           <Card>
             <CardContent className="p-12 text-center">
@@ -240,7 +301,7 @@ function PreviewContent() {
               <div className="grid grid-cols-2 gap-4 max-w-md mx-auto text-left">
                 <div>
                   <p className="text-xs text-muted-foreground uppercase">Size</p>
-                  <p className="font-medium">{fileData.size}</p>
+                  <p className="font-medium">{formatFileSize(fileData.size)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground uppercase">Type</p>
