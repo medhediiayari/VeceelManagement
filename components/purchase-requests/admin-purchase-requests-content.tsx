@@ -285,6 +285,7 @@ export function AdminPurchaseRequestsContent() {
   }, [fetchData])
 
   // Subscribe to Server-Sent Events for real-time PR updates
+  // Only refresh when no dialog is open to prevent disrupting user work
   useEffect(() => {
     const eventSource = new EventSource("/api/purchase-requests/events")
     
@@ -292,8 +293,11 @@ export function AdminPurchaseRequestsContent() {
       try {
         const data = JSON.parse(event.data)
         if (data.type === "pr-change") {
-          // Refresh data when a new PR is created
-          fetchData()
+          // Only refresh if no dialog is open
+          const anyDialogOpen = isViewDialogOpen || isQuotationDialogOpen || isBCDialogOpen || isViewBCDialogOpen
+          if (!anyDialogOpen) {
+            fetchData()
+          }
         }
       } catch (error) {
         console.error("SSE parse error:", error)
@@ -308,7 +312,7 @@ export function AdminPurchaseRequestsContent() {
     return () => {
       eventSource.close()
     }
-  }, [fetchData])
+  }, [fetchData, isViewDialogOpen, isQuotationDialogOpen, isBCDialogOpen, isViewBCDialogOpen])
 
   // Stats
   const stats = useMemo(() => ({
